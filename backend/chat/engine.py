@@ -30,6 +30,7 @@ EMERGENCY = tr("emergency", "en")
 GREETING = re.compile(r"^\s*(hi|hello|hey|salam|salaam|assalam[\w\s\-']*|aoa|good\s(morning|afternoon|evening)|thanks?(\s+you)?|thank\s*you|shukriya|jazak\w*)\W*$", re.I)
 OTHER_WORDS = {"other", "others", "something else", "none of these", "kuch aur", "doosra", "کچھ اور", "دیگر"}      # the app adds its own "Other" box
 ANSWER_TOKENS = 3200            # Urdu script costs many tokens per word; a cut-off JSON answer cannot be read at all
+TOPIC_SWITCH_SECONDS = 5          # how long the browser waits before it opens the new chat by itself
 INTENTS = {"legal_question", "follow_up", "document_question", "greeting", "out_of_scope", "unclear"}
 TAGS = {"Property Law", "Family Law", "Criminal Law", "Labour & Employment", "Contract Law", "Consumer Rights",
         "Constitutional Rights", "Civil Procedure", "Cyber Law", "Other"}
@@ -126,6 +127,12 @@ class ChatEngine:
         a["title"] = (a.get("title") or message[:40]).strip()[:60]
         a["jurisdiction"] = a.get("jurisdiction") if a.get("jurisdiction") in ("Punjab", "ICT", "Federal") else None
         a["emergency"] = bool(a.get("emergency"))
+        # A new topic only counts when an earlier legal exchange exists, the message is a real legal question, nobody is in danger, no document is attached
+        # and the message is not the user's answer to the clarifying question that was just asked. The model proposes, this code decides.
+        had_exchange = any(h.get("kind") in ("answer", "clarify") for h in history)
+        answering_clarify = bool(history) and history[-1].get("kind") == "clarify"
+        a["topic_changed"] = bool(a.get("topic_changed")) and a["intent"] == "legal_question" and had_exchange and not answering_clarify \
+            and not has_document and not a["emergency"]
         rounds = sum(1 for h in history if h.get("kind") == "clarify")
         qs_ok = []
         for q in (a.get("questions") or [])[:3]:
@@ -193,7 +200,7 @@ class ChatEngine:
             return self._done(self._info(reason, text, lang=lang), meta, t0, None, error=f"{type(e).__name__}: {e}")
         lang = langmod.resolve(language, clean, hist, analysis.get("language"))
         meta["language"] = lang
-        meta["analysis"] = {k: analysis[k] for k in ("intent", "language", "jurisdiction", "emergency", "needs_clarification", "search_queries", "tag")}
+        meta["analysis"] = {k: analysis[k] for k in ("intent", "language", "jurisdiction", "emergency", "topic_changed", "needs_clarification", "search_queries", "tag")}
         conv = {"title": analysis["title"], "tag": analysis["tag"]}
         emergency = tr("emergency", lang) if analysis["emergency"] else None
 
@@ -202,6 +209,8 @@ class ChatEngine:
             if not reply or not _in_language(reply, lang):         # the model answered in another language than the user's: use the fixed text
                 reply = tr("greeting" if analysis["intent"] == "greeting" else "out_of_scope", lang)
             return self._done(self._info(analysis["intent"], reply, emergency, lang=lang), meta, t0, conv)
+        if analysis["topic_changed"]:
+            return self._done(self._topic_change(analysis, lang), meta, t0, None)          # no answer here: the browser opens a new chat and asks again there
         if analysis["needs_clarification"]:
             return self._done(self._clarify(analysis["questions"], lang), meta, t0, conv)
 
@@ -311,6 +320,12 @@ class ChatEngine:
     def _info(reason: str, text: str, emergency: str | None = None, lang: str = "en") -> dict:
         return {"role": "assistant", "kind": "info", "reason": reason, "createdAt": _now(), "language": lang,
                 "text": ((emergency + " ") if emergency else "") + text, "content": text, "confidence": None}
+
+    @staticmethod
+    def _topic_change(analysis: dict, lang: str) -> dict:
+        text = tr("topic_change", lang)
+        return {"role": "assistant", "kind": "topic_change", "createdAt": _now(), "language": lang, "text": text, "content": text,
+                "title": analysis["title"], "tag": analysis["tag"], "seconds": TOPIC_SWITCH_SECONDS, "confidence": None}
 
     @staticmethod
     def _clarify(questions: list[dict], lang: str = "en") -> dict:

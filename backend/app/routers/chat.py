@@ -113,8 +113,11 @@ def send_message(conv_id: UUID, body: MessageIn, request: Request, user: dict = 
     def work() -> None:
         try:
             result = cs.run_turn(state, user, str(conv_id), text, language, status, docs=docs)
-            events.put(("conversation", result["conversation"]))
-            events.put(("answer", result["message"]))
+            if result.get("topicChange"):                                          # the browser starts a new chat for this question
+                events.put(("topic_change", result["topicChange"]))
+            else:
+                events.put(("conversation", result["conversation"]))
+                events.put(("answer", result["message"]))
         except ApiError as e:
             events.put(("error", {"code": e.code, "message": e.message}))
         except Exception:                                                          # noqa: BLE001 - run_turn already logged details

@@ -23,7 +23,6 @@ TAG_ICON = {"Property Law": "home", "Family Law": "person", "Criminal Law": "doc
 TOPICS = {"tenant-rights": ("Tenant rights in Pakistan", "Property Law"), "employment": ("Employment termination", "Labour & Employment"),
           "inheritance": ("Family inheritance", "Family Law"), "consumer": ("Consumer complaint", "Consumer Rights")}
 CONV_COLS = "id, title, title_auto, tag, icon, preview, pinned, created_at, updated_at"
-HISTORY_CHARS = 1200
 
 
 def conv_out(r: dict) -> dict:
@@ -66,10 +65,34 @@ def create_conversation(state: AppState, user_id: str, first_message: str, topic
         [user_id, title, tag, TAG_ICON.get(tag, "chat"), " ".join(first_message.split())[:60]])
 
 
+def _flat(parts) -> str:
+    """Rich text ([text, {b}, {cite}]) as plain words: bold kept as words, citation chips dropped (their numbers only mean something inside one answer)."""
+    if isinstance(parts, str):
+        return parts
+    return "".join(p if isinstance(p, str) else p.get("b", "") for p in (parts or []) if isinstance(p, (str, dict)))
+
+
+def history_text(r: dict) -> str:
+    """One stored message as the model should read it: an answer in FULL (what it assumed, what the law says, the steps, the checklist, the warning),
+    a clarifying question with its options, anything else as it was written. Nothing is cut."""
+    p = r.get("payload") or {}
+    if r["kind"] == "answer" and p:
+        lines = [("Assumed: " + p["assumptions"]) if p.get("assumptions") else "", _flat(p.get("intro")), _flat(p.get("law"))]
+        lines += [f"Step {i}: {_flat(s)}" for i, s in enumerate(p.get("steps") or [], start=1)]
+        if p.get("prepare"):
+            lines.append("Keep ready: " + "; ".join(str(x) for x in p["prepare"]))
+        lines += [("Important: " + p["important"]) if p.get("important") else "", p.get("outro") or ""]
+        text = "\n".join(x for x in lines if x and x.strip())
+        return text or r["content"]
+    if r["kind"] == "clarify" and p.get("questions"):
+        return (p.get("intro") or "") + " " + " ".join(f"{q['text']} (options: {' / '.join(q.get('options') or [])})" for q in p["questions"])
+    return r["content"]
+
+
 def _history(state: AppState, conv_id: str) -> list[dict]:
-    rows = state.db.all("select role, kind, content from app.messages where conversation_id = %s order by seq desc limit %s",
-                        [conv_id, state.settings.history_messages])
-    return [{"role": r["role"], "kind": r["kind"], "content": r["content"][:HISTORY_CHARS]} for r in reversed(rows)]
+    """EVERY earlier message of this conversation, oldest first, uncut. The model is given the whole chat, however long it is."""
+    rows = state.db.all("select role, kind, content, payload from app.messages where conversation_id = %s order by seq asc", [conv_id])
+    return [{"role": r["role"], "kind": r["kind"], "content": history_text(r)} for r in rows]
 
 
 def _safe_meta(meta: dict) -> dict:
@@ -102,6 +125,11 @@ def run_turn(state: AppState, user: dict, conv_id: str, text: str, language: str
             doc_text = select_context(docs, text, state.settings.docs.chat_doc_chars)
         out = engine.respond(text, history=history, profile=engine_profile(user), language=language, on_status=on_status, attachment_text=doc_text)
         msg, meta = out["message"], out.get("meta", {})
+
+        if msg["kind"] == "topic_change":                       # a different matter: not answered here, and the question does not stay in this chat
+            state.db.run("delete from app.messages where id = %s", [user_msg["id"]])
+            user_msg = None
+            return {"topicChange": {"text": msg["text"], "title": msg.get("title"), "tag": msg.get("tag"), "seconds": msg["seconds"], "language": msg.get("language")}}
 
         if msg["kind"] == "info" and msg.get("reason") in ("error", "busy"):      # nothing useful was produced
             raise ApiError(503 if msg["reason"] == "error" else 429, "UNAVAILABLE" if msg["reason"] == "error" else "RATE_LIMITED", msg["text"])

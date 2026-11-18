@@ -37,7 +37,8 @@ export const chatService = {
   },
 
   /**
-   * Sends a user message and resolves with the assistant's message (kind: answer | clarify | info).
+   * Sends a user message and resolves with the assistant's message (kind: answer | clarify | info), or { kind: 'topic_change', text, title, tag, seconds, language }
+   * when the question is about a different matter: nothing was stored for it, and the page opens a new chat and asks again there.
    * Real backend: POST .../messages returns text/event-stream:
    *   `status` {state:'thinking'|'loading_library'|'reading_image'|'searching_sources'|'writing_answer'} ('reading_image' only when a photo is attached: it is read now, not at upload) ... `conversation` (renamed/updated) -> `answer` (the Message) | `error`.
    * `onStatus({state})` drives the progress label; `onConversation(conversation)` receives the auto-generated title and tag.
@@ -49,15 +50,18 @@ export const chatService = {
       return { id: uid('msg'), ...genericAnswer(content, now()) }
     }
     let answer = null
+    let topic = null
     await stream(EP.chat.messages(conversationId), { content, attachmentIds, language }, {
       signal,
       onEvent: ({ event, data }) => {
         if (event === 'answer') answer = data
+        else if (event === 'topic_change') topic = data
         else if (event === 'conversation') onConversation?.(data)
         else if (event === 'error') throw new Error(data?.message || 'LegalMate could not answer right now.')
         else if (event === 'status') onStatus?.(data)
       },
     })
+    if (topic) return { kind: 'topic_change', ...topic }
     if (!answer) throw new Error('No answer received.')
     return answer
   },

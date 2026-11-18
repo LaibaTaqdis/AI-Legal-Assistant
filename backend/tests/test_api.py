@@ -355,3 +355,27 @@ def test_deleting_a_user_removes_their_conversations(client):
     db.run("delete from app.users where id = %s", [j["user"]["id"]])
     assert db.one("select count(*) as n from app.messages where user_id = %s", [j["user"]["id"]])["n"] == 0
     assert db.one("select count(*) as n from app.conversations where user_id = %s", [j["user"]["id"]])["n"] == 0
+
+
+def test_the_model_gets_every_earlier_message_in_full_and_a_new_topic_leaves_no_trace(client, engine):
+    _, h = signup(client)
+    c = new_conv(client, h)
+    ask(client, h, c["id"], "Can my landlord raise the rent?")
+    ask(client, h, c["id"], "vague housing problem")                                       # a clarifying question with options
+    for i in range(2):                                                                     # (the server allows a short burst of messages per minute)
+        r_, ev_ = ask(client, h, c["id"], f"Follow-up number {i} " + "details " * 400)             # long messages: none may be cut
+        assert r_.status_code == 200 and ev_[-1][0] == "answer", (i, r_.status_code, r_.text[:200])
+    history = engine.calls[-1]["history"]
+    assert len(history) == 6                                                              # every earlier message: question, answer, vague question, clarify, follow-up 0 and its answer
+    users = [m["content"] for m in history if m["role"] == "user"]
+    assert users[0] == "Can my landlord raise the rent?" and all(len(u) > 3000 for u in users[2:])   # the earliest and the long ones, uncut
+    answer = next(m for m in history if m["kind"] == "answer")["content"]
+    assert "Check your agreement." in answer and "Keep records." in answer and "[1]" not in answer       # the steps and the warning, no citation chips
+    clar = next(m for m in history if m["kind"] == "clarify")["content"]
+    assert "Tenant / Landlord" in clar                                                    # the options are part of what the model read
+    before = client.get(f"{A}/chat/conversations/{c['id']}", headers=h).json()["messages"]
+    r, ev = ask(client, h, c["id"], "newtopic: someone cheated me on a plot")
+    assert [e for e, _ in ev][-1] == "topic_change" and "answer" not in [e for e, _ in ev] and "conversation" not in [e for e, _ in ev]
+    assert ev[-1][1]["seconds"] == 5 and ev[-1][1]["text"] and ev[-1][1]["title"] == "Property fraud"
+    after = client.get(f"{A}/chat/conversations/{c['id']}", headers=h).json()["messages"]
+    assert after == before                                                                # the question was removed from this chat, no reply was stored

@@ -36,6 +36,11 @@ _T: dict[str, dict[str, str]] = {
         "ur": "آج کے لیے LegalMate کے جوابات کی حد پوری ہو چکی ہے۔ براہ کرم کل دوبارہ کوشش کریں۔",
         "ur-roman": "Aaj ke liye LegalMate ke jawabaat ki had poori ho chuki hai. Meharbani karke kal dobara koshish karein.",
     },
+    "topic_change": {
+        "en": "This looks like a new topic, so I am starting a new chat for it.",
+        "ur": "یہ ایک نیا موضوع لگتا ہے، اس لیے میں اس کے لیے نیا چیٹ شروع کر رہا ہوں۔",
+        "ur-roman": "Yeh naya mauzoo lagta hai, is liye main is ke liye naya chat shuru kar raha hoon.",
+    },
     "clarify_intro": {
         "en": "To give you accurate guidance I need a little more information. Tap an option or type your own answer:",
         "ur": "درست رہنمائی کے لیے مجھے تھوڑی مزید معلومات درکار ہیں۔ کوئی آپشن چنیں یا اپنا جواب خود لکھیں:",

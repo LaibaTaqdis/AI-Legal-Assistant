@@ -360,3 +360,54 @@ def test_answer_carries_assumptions_and_a_checklist():
     assert m["prepare"] == ["Your rent receipts", "The notice, if any", "Names of witnesses", "x"]       # text only, at most four
     out = ChatEngine(FakeKB([passage(1)]), ScriptedLLM(ANALYSIS, ANSWER)).respond("My landlord wants to evict me")
     assert out["message"]["assumptions"] == "" and out["message"]["prepare"] == []            # old-shaped answers still work
+
+
+# ------------------------------------------------------------------------------------------------ the whole chat reaches the model
+def test_the_model_reads_the_whole_chat_uncut():
+    from chat import prompts
+    hist = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"message {i} " + "word " * 3000, "kind": "answer" if i % 2 else None} for i in range(40)]
+    for build in (lambda: prompts.analyser_messages("next", history=hist, profile_line="", ui_language="en", has_document=False),
+                  lambda: prompts.answer_messages("next", history=hist, profile_line="", answer_language="en", passages=[passage(1)])):
+        user = build()[1]["content"]
+        assert all(f"message {i} " in user for i in range(40))                        # all 40 messages, not the last 4
+        assert user.count("word ") >= 40 * 3000                                        # and none of them cut to a few hundred characters
+
+
+# ------------------------------------------------------------------------------------------------ a new topic is not answered in this chat
+EARLIER = [{"role": "user", "content": "I rent a room. Can the landlord raise the rent?", "kind": "user"},
+           {"role": "assistant", "content": "Rent can only change by agreement.", "kind": "answer"}]
+
+
+def _topic(history, **analysis):
+    llm = ScriptedLLM({**ANALYSIS, "topic_changed": True, **analysis}, ANSWER)
+    out = ChatEngine(FakeKB([passage(1)]), llm).respond("Someone sold me a plot and took my money, what can I do?", history=history)
+    return out, llm
+
+
+def test_a_different_matter_is_sent_to_a_new_chat_with_one_model_call():
+    out, llm = _topic(EARLIER)
+    m = out["message"]
+    assert m["kind"] == "topic_change" and m["seconds"] == 5 and m["title"] == "Eviction for unpaid rent" and m["text"]
+    assert llm.live_calls == 1 and out["conversation"] is None                          # only the check was paid for; nothing was answered or renamed
+    assert out["meta"]["analysis"]["topic_changed"] is True
+
+
+def test_the_code_only_accepts_a_topic_change_when_it_makes_sense():
+    assert _topic([])[0]["message"]["kind"] == "answer"                                       # a first message cannot change topic
+    assert _topic([{"role": "user", "content": "hello", "kind": "user"}, {"role": "assistant", "content": "Hi", "kind": "info"}])[0]["message"]["kind"] == "answer"   # a greeting is not a matter
+    clarify = EARLIER[:1] + [{"role": "assistant", "content": "Which city?", "kind": "clarify"}]
+    assert _topic(clarify)[0]["message"]["kind"] == "answer"                                  # the reply to our own question is never a new topic
+    assert _topic(EARLIER, emergency=True)[0]["message"]["kind"] == "answer"                  # someone in danger is answered at once
+    assert _topic(EARLIER, intent="follow_up")[0]["message"]["kind"] == "answer"
+    llm = ScriptedLLM({**ANALYSIS, "topic_changed": True}, ANSWER)
+    out = ChatEngine(FakeKB([passage(1)]), llm).respond("Explain this", history=EARLIER, attachment_text="a long contract text")
+    assert out["message"]["kind"] == "answer"                                                 # a question about an attached document stays here
+    llm = ScriptedLLM({**ANALYSIS, "topic_changed": False}, ANSWER)
+    assert ChatEngine(FakeKB([passage(1)]), llm).respond("And can he evict me?", history=EARLIER)["message"]["kind"] == "answer"
+
+
+def test_the_notice_is_in_the_users_language():
+    from chat.strings import tr
+    llm = ScriptedLLM({**ANALYSIS, "topic_changed": True}, ANSWER)
+    out = ChatEngine(FakeKB([passage(1)]), llm).respond("mujhe ek aur masla hai, plot ka", history=EARLIER, language="ur-roman")
+    assert out["message"]["kind"] == "topic_change" and out["message"]["text"] == tr("topic_change", "ur-roman") and out["message"]["language"] == "ur-roman"

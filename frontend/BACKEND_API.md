@@ -442,7 +442,14 @@ data: { ...Conversation (new title/tag/preview/updatedAt) }
 event: answer
 data: { ...assistant Message (full JSON, any kind) }
 ```
+When the question is about a DIFFERENT matter than the rest of the chat, the stream sends this instead of `conversation` and `answer`:
+```
+event: topic_change
+data: { "text": "This looks like a new topic, so I am starting a new chat for it.", "title": "Fired without notice", "tag": "Labour & Employment", "seconds": 5, "language": "en" }
+```
+Nothing is stored for that question (the user message is removed, no reply is saved, the conversation is not renamed). The page shows a 5-second ring with OK and Cancel: OK, or the end of the 5 seconds, creates a new conversation (`POST /chat/conversations`), sends the same question there and drops it from this chat; Cancel drops the question. The check is made by the analyser (`topic_changed`) and confirmed by code: it applies only when the chat already holds an answer or a clarifying question, the message is a legal question, no document is attached, nobody is in danger, and the message is not the reply to a clarifying question. The check costs the one analyser call.
 - Store both the user message and the assistant message.
+- The model is given the WHOLE conversation on every message: every earlier user message and reply, oldest first, with no limit on the number of messages or on their length. An answer is passed in full (what it assumed, the law paragraph, the steps, the checklist, the warning; citation numbers are removed), and a clarifying question is passed with its options. A very long chat costs more per message and can in the end exceed the model's input limit; the topic-change check keeps chats on one matter, which keeps them short.
 - If something fails, the stream ends with `event: error` and `data: {"code":"UNAVAILABLE|RATE_LIMITED|INTERNAL","message":"..."}`; the unanswered user message is removed, so the user can simply send it again. A `: keep-alive` comment line is sent every 10 seconds on slow answers. Checks that fail before streaming starts (not your conversation, empty text, rate limits, attachments) are ordinary HTTP errors: `404`, `400`, `429`, `422`.
 - Token streaming (`event: delta`) is not used: the answer is verified in full before it is sent, so the UI shows the progress labels instead.
 - Update the conversation's `preview` and `updatedAt`.

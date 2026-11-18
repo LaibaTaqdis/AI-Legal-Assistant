@@ -135,7 +135,6 @@ class AppSettings:
     max_msgs_per_hour: int = 0            # per user; 0 = no limit
     max_msgs_per_day: int = 0             # per user; 0 = no limit
     engine_concurrency: int = 4           # answers computed at the same time (CPU + DeepSeek)
-    history_messages: int = 6             # earlier messages shown to the model
     db_pool_max: int = 5
     supabase_url: str = ""                # SUPABASE_URL           Storage for the Legal Vault files (empty = files are switched off)
     supabase_service_key: str = ""        # SUPABASE_SERVICE_KEY   server-side only: never sent to the browser

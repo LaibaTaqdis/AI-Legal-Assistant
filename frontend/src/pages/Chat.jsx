@@ -389,6 +389,48 @@ function Clarify({ m, onAsk, answered }) {
   )
 }
 
+/** "This looks like a new topic": a ring counts down 5 seconds, then the question moves to a new chat by itself. OK moves it at once, Cancel drops it. */
+function TopicSwitch({ m, onGo, onCancel }) {
+  const T = answerText(m.language)
+  const total = (m.seconds || 5) * 1000
+  const [left, setLeft] = useState(total)
+  const done = useRef(false)
+  const finish = fn => { if (done.current) return; done.current = true; fn() }
+  useEffect(() => {
+    const t0 = Date.now()
+    const iv = setInterval(() => {
+      const rest = Math.max(0, total - (Date.now() - t0))
+      setLeft(rest)
+      if (rest === 0) { clearInterval(iv); finish(onGo) }
+    }, 100)
+    return () => clearInterval(iv)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const secs = Math.ceil(left / 1000)
+  return (
+    <div className="msg-bot">
+      <span className="msg-bot-avatar"><img src="/assets/img/logo-mark-gold.png" alt="" /></span>
+      <div className="msg-bot-body">
+        <p className="msg-meta"><b>LegalMate</b></p>
+        <div className="answer topic-switch" dir={m.language === 'ur' ? 'rtl' : 'ltr'} role="status" aria-live="polite">
+          <div className="ts-ring" style={{ '--ts': `${total}ms` }} aria-hidden="true">
+            <svg width="56" height="56" viewBox="0 0 56 56"><circle className="ts-track" cx="28" cy="28" r="22" /><circle className="ts-run" cx="28" cy="28" r="22" /></svg>
+            <b>{secs}</b>
+          </div>
+          <div className="ts-body">
+            <p>{m.text}</p>
+            <span>{T.topicIn} {secs}…</span>
+            <div className="ts-actions">
+              <button type="button" className="btn btn-orange btn-sm" onClick={() => finish(onGo)}>{T.topicOk}</button>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => finish(onCancel)}>{T.topicCancel}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PlainReply({ m }) {
   return (
     <div className="msg-bot">
@@ -511,6 +553,7 @@ export default function Chat() {
   const [typing, setTyping] = useState(false)
   const [stage, setStage] = useState('')
   const [highlight, setHighlight] = useState(null)
+  const [topicSwitch, setTopicSwitch] = useState(null)        // { convId, text, opts, message }: a question that belongs in a new chat, counting down
   const scrollRef = useRef(null)
 
   useEffect(() => { loadConversations() }, [])
@@ -538,10 +581,19 @@ export default function Chat() {
     setTyping(true)
     setStage(STAGES.thinking)
     try {
-      const answer = normMsg(await chatService.sendMessage(convId, { content: text, ...opts }, {
+      const raw = await chatService.sendMessage(convId, { content: text, ...opts }, {
         onStatus: ({ state }) => state && setStage(STAGES[state] || ''),
         onConversation: conv => { upsertConv(conv); store.emit() },
-      }))
+      })
+      if (raw.kind === 'topic_change') {            // a different matter: take the question back out of this chat and offer a new one
+        const msgs = store.msgs[convId] || []
+        const last = msgs[msgs.length - 1]
+        if (last?.kind === 'user' && last.text === text) store.msgs[convId] = msgs.slice(0, -1)
+        store.emit()
+        setTopicSwitch({ convId, text, opts, message: normMsg(raw) })
+        return
+      }
+      const answer = normMsg(raw)
       store.msgs[convId] = [...(store.msgs[convId] || []), answer]
       const c = store.convs?.find(x => x.id === convId)
       if (c) upsertConv({ ...c, preview: `${text.slice(0, 32)}...`, time: now(), group: 'Today' })
@@ -566,6 +618,11 @@ export default function Chat() {
       toast(e.message || 'Could not start a conversation', 'info')
     }
   }
+
+  // The countdown ended or OK was pressed: the question opens a new chat and is answered there. Cancel drops it.
+  const moveToNewChat = () => { const t = topicSwitch; setTopicSwitch(null); if (t) startConversation(t.text, t.opts) }
+  useEffect(() => { setTopicSwitch(null) }, [id])        // leaving the chat while the ring runs cancels it
+  useEffect(() => { if (topicSwitch) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [topicSwitch])
 
   // Search from the top bar lands here with ?q=
   const startedFromQuery = useRef(false)           // React runs effects twice in development: one ?q= must start one conversation
@@ -677,6 +734,7 @@ export default function Chat() {
           ) : (
             <Answer key={m.id} m={m} onCite={onCite} onAsk={text => !typing && sendFollowUp(text)} panel={activePanel} onPanel={p => setPanel(activePanel === p ? null : p)} />
           ))}
+          {topicSwitch && topicSwitch.convId === id && <TopicSwitch key={topicSwitch.message.id || topicSwitch.text} m={topicSwitch.message} onGo={moveToNewChat} onCancel={() => setTopicSwitch(null)} />}
           {typing && (
             <div className="msg-bot">
               <span className="msg-bot-avatar"><img src="/assets/img/logo-mark-gold.png" alt="" /></span>
@@ -686,7 +744,7 @@ export default function Chat() {
           )}
         </div>
         <div className="chat-compose-wrap">
-          <Composer placeholder="Type a follow-up question..." onSend={sendFollowUp} disabled={typing} />
+          <Composer placeholder="Type a follow-up question..." onSend={sendFollowUp} disabled={typing || !!topicSwitch} />
           <div className="chat-foot"><span>LegalMate provides information, not formal legal representation.</span><span>Press Enter to send  •  Shift + Enter for new line</span></div>
         </div>
       </section>

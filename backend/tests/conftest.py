@@ -129,6 +129,10 @@ class FakeEngine:
             return info("busy", "LegalMate has reached its answer limit for today. Please try again tomorrow.")
         if "boom" in low:
             raise RuntimeError("engine exploded")
+        if "newtopic" in low:
+            return {"message": {"role": "assistant", "kind": "topic_change", "createdAt": "x", "language": language, "text": "This looks like a new topic, so I am starting a new chat for it.",
+                                "content": "This looks like a new topic, so I am starting a new chat for it.", "title": "Property fraud", "tag": "Property Law", "seconds": 5, "confidence": None},
+                    "conversation": None, "meta": {"seconds": 0.1}}
         if "vague" in low:
             q = [{"id": "q1", "text": "Are you the tenant or the landlord?", "options": ["Tenant", "Landlord"]}]
             return {"message": {"role": "assistant", "kind": "clarify", "createdAt": "x", "intro": "I need more information.", "questions": q,
